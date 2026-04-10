@@ -1,4 +1,4 @@
-name: DHM-env
+name: DHN-env
 channels:
   - anaconda
   - https://repo.anaconda.com/pkgs/main
