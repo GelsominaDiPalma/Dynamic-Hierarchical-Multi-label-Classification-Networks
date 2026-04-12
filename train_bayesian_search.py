@@ -4,52 +4,30 @@ os.environ["DATA_FOLDER"] = "./"
 
 import argparse
 import csv
-
 import torch
 import torch.utils.data
 import torch.nn as nn
-
 from utils.parser import *
-from utils import parser_ontology
-from utils import datasets
+from utils import parser_ontology, datasets
 import random
 import sys
-
 from sklearn.impute import SimpleImputer
-
 from sklearn import preprocessing
 from sklearn.model_selection import train_test_split
-
-
 from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve, roc_auc_score, auc
-
 from hyperopt import STATUS_OK, hp, tpe, Trials, fmin
-
 from timeit import default_timer as timer
-
 import pickle
 
 
 # Training settings
 parser = argparse.ArgumentParser(description='Train neural network')
-
-# Required  parameters (now the hyperparameters should be managed by hyperopt, we just need a couple parameters for our 
-# internal "machinery". We also want them where everyone can see tem so we don't have to add parameters to the objective function)
-parser.add_argument('--dataset', type=str, required=True,
-                    help='dataset')
-parser.add_argument('--device', type=int, default=0,
-                    help='device (default:0)')
-parser.add_argument('--num_epochs', type=int, default=2000,
-                    help='Max number of epochs to train (default:2000)')
-parser.add_argument('--seed', type=int, default=0,
-                    help='random seed (default:0)')
-# add parameter for MAX_EVALS (so it can be easily set to be different for different datasets)
-parser.add_argument('--max_evals', type=int, required=True,
-                    help='max number of evaluations to perform')
-# add required parameter to discriminate between a new search and an already started one
-parser.add_argument('--new_search', type=int, required=True,
-                    help='value indicating if the current search is a new one or not. The only admissible values are 1 (True) and 0 (False)')
-
+parser.add_argument('--dataset', type=str, required=True, help='dataset')
+parser.add_argument('--device', type=int, default=0, help='device (default:0)')
+parser.add_argument('--num_epochs', type=int, default=2000, help='Max number of epochs to train (default:2000)')
+parser.add_argument('--seed', type=int, default=0, help='random seed (default:0)')
+parser.add_argument('--max_evals', type=int, required=True, help='max number of evaluations to perform')
+parser.add_argument('--new_search', type=int, required=True, help='value indicating if the current search is a new one or not. The only admissible values are 1 (True) and 0 (False)')
 args = parser.parse_args()
 
 dataset_name = args.dataset
@@ -57,8 +35,6 @@ data = dataset_name.split('_')[0]
 ontology = dataset_name.split('_')[1]
 num_epochs = args.num_epochs
 new_search = args.new_search
-
-# Pick device
 device = torch.device("cuda:"+str(args.device) if torch.cuda.is_available() else "cpu")
 
 # Set seed
@@ -71,20 +47,10 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 iteration = 0
-
-# the NEW evaluations (possible previous evaluations are automatically detected)
 MAX_EVALS = args.max_evals
 
 
 def get_constr_out(out, R, alfa):
-    """ Given the output of the neural network x returns the output of the final and intermediate constraint modules
-    given the hierarchy constraint expressed in the matrix R """
-
-    # Given n classes, R is an (n x n) matrix where R_ij = 1 if class i is ancestor of class j (it means that j is the subclass)
-    
-    # In the bottom module h we have 2 outputs for each class.
-    # Also, we separate the computations for c_out_y and c_out_n.
-
     # c_out_y:
     c_out_y = out[0].double() 
     c_out_y = c_out_y.unsqueeze(1)
@@ -98,23 +64,13 @@ def get_constr_out(out, R, alfa):
     c_out_n = c_out_n.expand(len(out[1]), R_t.shape[1], R_t.shape[1])
     R_batch_n = R_t.expand(len(out[1]), R_t.shape[1], R_t.shape[1])
 
-    # Now the intermediate CM is obtained separately for the y outputs and the n ones.
     inter_out_y, _ = torch.max(R_batch_y*c_out_y.double(), dim = 2)
     inter_out_n, _ = torch.max(R_batch_n*c_out_n.double(), dim = 2)
-
-    # The final comparison is done directly between inter_out_y and inter_out_n
-    #final_out = torch.where(inter_out_y>inter_out_n, inter_out_y, 1-inter_out_n)
-
-    # NOW for final_out we directly use alfa in the computation
-    # CM = alfa*CMY + (1-alfa)*(1-CMN)
     final_out = alfa*inter_out_y + (1-alfa)*(1-inter_out_n)
-
-    #final_out has the "not_doubled" dimension
     return final_out, inter_out_y, inter_out_n
 
 
 class ConstrainedFFNNModel(nn.Module):
-    """ our model - during training it returns the not-constrained output that is then passed to MCLoss """
     def __init__(self, input_dim, hidden_dim, output_dim, hyperparams, R, alfa):
         super(ConstrainedFFNNModel, self).__init__()
         
